@@ -1,4 +1,3 @@
-## Code copy from https://github.com/YatingMusic/remi/blob/master/utils.py
 import tensorflow as tf
 import numpy as np
 def embedding_lookup(lookup_table, x):
