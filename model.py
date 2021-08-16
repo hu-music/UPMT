@@ -19,7 +19,6 @@ class PopMusicTransformer(object):
         self.event2word, self.word2event = pickle.load(open(self.dictionary_path, 'rb'))
         # model settings
         self.group_size = 4 
-        # self.x_len = 512
         self.mem_len = 128
         self.n_layer = 12
         self.d_embed = 512
@@ -37,7 +36,6 @@ class PopMusicTransformer(object):
         else:
             self.batch_size = 1
         self.checkpoint_path = '{}/model'.format(checkpoint)
-
         self.load_model()
 
     ########################################
@@ -61,8 +59,6 @@ class PopMusicTransformer(object):
         with tf.compat.v1.variable_scope(tf.compat.v1.get_variable_scope()):
             xx = tf.transpose(self.x, [1, 0])
             yy = tf.transpose(self.y, [1, 0])
-            # print('y',self.y)
-            # print('yy',yy)
             loss, self.logits, self.new_mem= modules.transformer(
                 dec_inp=xx,
                 target=yy,
@@ -95,7 +91,6 @@ class PopMusicTransformer(object):
             print('transformer loss',loss)
 
         self.avg_loss = tf.reduce_mean(loss)
-        # print('avg_loss',self.avg_loss)
         # vars
         all_vars = tf.compat.v1.trainable_variables()
         grads = tf.gradients(self.avg_loss, all_vars)
@@ -121,7 +116,6 @@ class PopMusicTransformer(object):
     ########################################
     def temperature_sampling(self, logits, temperature, topk):
         probs = np.exp(logits / temperature) / np.sum(np.exp(logits / temperature))
-        # print(probs)
         if topk == 1:
             prediction = np.argmax(probs)
         else:
@@ -200,7 +194,6 @@ class PopMusicTransformer(object):
         return pitch_class
     def mid2seq_all(self,prompt):
         events = self.extract_events_all(prompt)
-            # words = [[self.event2word['{}_{}'.format(e.name, e.value)] for e in events]]
         words=[[]]
         noteon_temp=[]
         noted_temp=[]
@@ -227,7 +220,6 @@ class PopMusicTransformer(object):
 
     def mid2seq(self,prompt):
         events = self.extract_events(prompt)
-            # words = [[self.event2word['{}_{}'.format(e.name, e.value)] for e in events]]
         words=[[]]
         noteon_temp=[]
         noted_temp=[]
@@ -255,7 +247,6 @@ class PopMusicTransformer(object):
 
     def mid2seq_single(self,prompt):
         events = self.extract_events_single(prompt)
-            # words = [[self.event2word['{}_{}'.format(e.name, e.value)] for e in events]]
         words=[[]]
         noteon_temp=[]
         noted_temp=[]
@@ -281,7 +272,7 @@ class PopMusicTransformer(object):
         return words, noteon_temp,noted_temp,position_temp
     # generate
     ########################################
-    def generate_noteon(self, temperature, topk, output_path,smpi=np.array([-2,1,1,3]),prompt=None): # transfer position
+    def generate_noteon(self, temperature, topk, output_path,smpi=np.array([-2,1,1,3]),prompt=None,modes='single'): # transfer position
         noteon_idx=[]
         notev_idx=[]
         for i in range(len(self.word2event)):
@@ -289,21 +280,24 @@ class PopMusicTransformer(object):
                 noteon_idx.append(i)
             elif self.word2event[i].split('_')[0]=='Note Velocity':
                 notev_idx.append(i)
-
-        ww=[]
-        words,noteon_temp,_,_= self.mid2seq_single(prompt) # transfer on this track: the track with most note information
-        words1,noteon_temp1,_,_= self.mid2seq(prompt) # these tracks remains same, with a lower volumn
-        for i in range(len(words1[0])):
-            if words1[0][i] in notev_idx:
-                words1[0][i] = 57
-        bars=np.where(np.array(words[0])==0)[0]
-        bars1=np.where(np.array(words1[0])==0)[0]
+        if modes == 'single':
+            ww=[]
+            words,noteon_temp,_,_= self.mid2seq_single(prompt) # transfer on this track: the track with most note information
+            words1,noteon_temp1,_,_= self.mid2seq(prompt) # these tracks remains same, with a lower volumn
+            for i in range(len(words1[0])):
+                if words1[0][i] in notev_idx:
+                    words1[0][i] = 57
+            bars=np.where(np.array(words[0])==0)[0]
+            bars1=np.where(np.array(words1[0])==0)[0]
+        else:
+            words,noteon_temp,_,_= self.mid2seq_all(prompt)
 
         tem=[] # all note on in input sequence 
         for i in range(len(words[0])):
             if words[0][i] in noteon_idx:
-                tem.append(i)  
-        # input
+                tem.append(i)             
+
+    # input
         traindata=[[]]
         traindata[0]=words[0][:tem[0]]
         original_length = len(traindata[0])
@@ -343,9 +337,11 @@ class PopMusicTransformer(object):
                             topk=topk)
                     word = noteon_idx[word]
                     words[0][temi] = word
+                    print('word:',words[0][temi])
                     traindata[0].append(word)
                 else: #predict by SMPI
                     words[0][temi] = words_temp[idx]
+                    print('word:',words[0][temi])
                     traindata[0].append(words_temp[idx])
                     idx+=1
                     if idx >len(words_temp)-1:
@@ -382,12 +378,14 @@ class PopMusicTransformer(object):
             temi+=1
             # re-new mem
             batch_m = _new_mem
-        i=0
-        ww=[]
-        while i < min(len(bars),len(bars1))-1:
-            ww=ww+words[0][bars[i]:bars[i+1]]+words1[0][bars1[i]+1:bars1[i+1]]
-            i+=1
-
+        if modes=='single':
+            i=0
+            ww=[]
+            while i < min(len(bars),len(bars1))-1:
+                ww=ww+words[0][bars[i]:bars[i+1]]+words1[0][bars1[i]+1:bars1[i+1]]
+                i+=1
+        else:
+            ww=words[0]
         # write
         utils.write_midi(
             words=ww,
@@ -397,6 +395,8 @@ class PopMusicTransformer(object):
    
     ########################################
     # prepare training data
+    ########################################
+
     def prepare_data(self, midi_paths):
         length=self.mem_len
         noteon_position=[]
@@ -439,7 +439,7 @@ class PopMusicTransformer(object):
             all_words.append(words)
             iii+=1
         # to training data
-        self.group_size = 5  #original: 5
+        self.group_size = 5 
         segments = []
         for words in all_words:
             pairs = []
@@ -457,33 +457,22 @@ class PopMusicTransformer(object):
         segments = np.array(segments)
         print('segments #:',segments.shape)
         pickle.dump(segments, open('./test/data/training.pickle',"wb"), protocol=2)
-        return segments    ########################################
+        return segments    
+    ########################################
     # finetune
     ########################################
     def finetune(self, training_data,favoritepath,alpha,output_checkpoint_folder):
         # shuffle
-
         Jnew1= [alpha]*308
         words,noteon_temp,noted_temp,position_temp= self.mid2seq(favoritepath)
-
         bwordnew=list(Counter(noteon_temp).keys())
         bwordnew=[self.event2word['Note On_'+ str(bwordnew[i])] for i in range(len(bwordnew))]
 
-        # print('bwordnew:',bwordnew)
         Jnew=[list(Counter(noteon_temp).values())[i]/len(noteon_temp) for i in range(len(list(Counter(noteon_temp).values())))]
-        # print('Jnew:',Jnew)
         Jnew=[Jnew[i]+alpha for i in range(len(Jnew))]
         for i in range(len(bwordnew)):
-            Jnew1[bwordnew[i]] = Jnew[i]
-        # bwordnew=list(Counter(noted_temp_t).keys())
-        # Jnew=[list(Counter(noted_temp_t).values())[i]/len(noted_temp_t) for i in range(len(list(Counter(noted_temp_t).values())))]
-        # Jnew=[Jnew[i]+alpha for i in range(len(Jnew))]
-        # for i in range(len(bwordnew)):
-        #     Jnew1[bwordnew[i]] = Jnew[i]
-        
-        
+            Jnew1[bwordnew[i]] = Jnew[i]      
         Jnew=Jnew1
-
         index = np.arange(len(training_data))
         np.random.shuffle(index)
         training_data = training_data[index]
@@ -524,6 +513,7 @@ class PopMusicTransformer(object):
     ########################################
     def close(self):
         self.sess.close()
+
 
 
     
